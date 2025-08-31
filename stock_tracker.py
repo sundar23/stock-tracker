@@ -2,9 +2,24 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import requests
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime, time as dt_time
+import schedule
+import threading
+import time
 
-# ------------------- Utility: Fetch HTML with headers -------------------
+# ------------------- Telegram Setup -------------------
+TELEGRAM_BOT_TOKEN = "8285449172:AAHIb7xbDl-zuKU_udn7oOrwrOzeLpa_z_A"
+TELEGRAM_CHAT_ID = "1298346236"
+
+def send_telegram_message(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+    try:
+        requests.post(url, data=payload)
+    except Exception as e:
+        st.write(f"⚠️ Telegram send failed: {e}")
+
+# ------------------- Utility: Fetch HTML -------------------
 def fetch_html(url):
     headers = {"User-Agent": "Mozilla/5.0"}
     response = requests.get(url, headers=headers)
@@ -26,50 +41,41 @@ def get_india_top50():
     url = "https://en.wikipedia.org/wiki/NIFTY_50"
     html = fetch_html(url)
     tables = pd.read_html(html)
-
-    # Find the table that has "Symbol" or "Company Name"
     table = None
     for t in tables:
         if any(col in t.columns for col in ["Symbol", "Company Name", "Ticker"]):
             table = t
             break
-
     if table is None:
         st.error("⚠️ Could not find NIFTY 50 table on Wikipedia.")
         return []
-
-    # Pick the correct column
     col_name = None
     for c in ["Symbol", "Ticker", "Company Name"]:
         if c in table.columns:
             col_name = c
             break
-
     if col_name is None:
         st.error("⚠️ No usable ticker column found in NIFTY 50 table.")
         return []
-
-    # Convert to Yahoo Finance tickers
     tickers = table[col_name].astype(str).apply(lambda x: x + ".NS").tolist()
     return tickers[:50]
-
 
 # ------------------- Streamlit UI -------------------
 st.title("📈 Stock Tracker - US & India")
 
 exchange = st.radio("Select Exchange", ["US", "India"])
-
 start_date = st.date_input("Start Date", date(2024, 1, 1))
 end_date = st.date_input("End Date", date.today())
 
-tickers = get_us_top50() if exchange == "US" else get_india_top50()
+# Dynamic thresholds
+drop_threshold = st.slider("Drop Alert Threshold (%)", -10.0, 0.0, -5.0, step=0.5)
+gain_threshold = st.slider("Gain Alert Threshold (%)", 0.0, 10.0, 5.0, step=0.5)
 
-# --- Adjust end_date (+1 day for Yahoo Finance bug) ---
+tickers = get_us_top50() if exchange == "US" else get_india_top50()
 end_date_plus = end_date + timedelta(days=1)
 
-# ------------------- Fetch Stock Data -------------------
+# ------------------- Top 50 Stock Data -------------------
 st.subheader(f"Top 50 Stocks - {exchange}")
-
 results = []
 for ticker in tickers:
     try:
@@ -87,20 +93,17 @@ for ticker in tickers:
 if results:
     df = pd.DataFrame(results, columns=["Ticker", "Start Price", "End Price", "% Change"])
     df = df.sort_values("% Change", ascending=False).reset_index(drop=True)
-
     st.dataframe(df)
-
     overall_pct = df["% Change"].mean()
     st.metric("📊 Overall Portfolio % Change (Top 50)", f"{overall_pct:.2f}%")
 else:
     st.error("No stock data available. Please adjust date range or try again.")
 
-# ------------------- Drop/Gain Analysis -------------------
+# ------------------- Drop/Gain Weekly Analysis -------------------
 st.subheader("📉📈 Drop & Gain Analysis (Last Week)")
-
-with st.expander("Set Thresholds"):
-    drop_threshold = st.slider("Drop Threshold (%)", -10.0, 0.0, -2.0, step=0.5)
-    gain_threshold = st.slider("Gain Threshold (%)", 0.0, 10.0, 1.0, step=0.5)
+with st.expander("Set Weekly Thresholds"):
+    drop_weekly_threshold = st.slider("Weekly Drop Threshold (%)", -10.0, 0.0, -2.0, step=0.5)
+    gain_weekly_threshold = st.slider("Weekly Gain Threshold (%)", 0.0, 10.0, 1.0, step=0.5)
 
 last_week_start = date.today() - timedelta(days=7)
 last_week_end = date.today() + timedelta(days=1)
@@ -114,16 +117,59 @@ for ticker in tickers:
             start_price = data["Close"].iloc[0]
             end_price = data["Close"].iloc[-1]
             pct_change = ((end_price - start_price) / start_price) * 100
-
-            if pct_change <= drop_threshold or pct_change >= gain_threshold:
+            if pct_change <= drop_weekly_threshold or pct_change >= gain_weekly_threshold:
                 drop_gain_results.append([ticker, start_price, end_price, pct_change])
+                alert_type = "🔻 Drop" if pct_change <= drop_weekly_threshold else "🔺 Gain"
+                message = f"{alert_type}: {ticker} changed {pct_change:.2f}% from {start_price:.2f} to {end_price:.2f}"
+                send_telegram_message(message)
     except:
         continue
 
 if drop_gain_results:
-    drop_gain_df = pd.DataFrame(
-        drop_gain_results, columns=["Ticker", "Start Price", "End Price", "% Change"]
-    )
+    drop_gain_df = pd.DataFrame(drop_gain_results, columns=["Ticker", "Start Price", "End Price", "% Change"])
     st.dataframe(drop_gain_df)
 else:
-    st.info("No stocks matched the drop/gain criteria in the last week.")
+    st.info("No stocks matched the weekly drop/gain criteria.")
+
+# ------------------- 30-Minute Market Hours Scheduler for India -------------------
+def check_stocks_market_hours():
+    now = datetime.now()
+    # Only weekdays
+    if now.weekday() >= 5:
+        return
+    # Only during market hours (9:30 - 15:30 IST)
+    market_open = dt_time(9, 30)
+    market_close = dt_time(15, 30)
+    if not (market_open <= now.time() <= market_close):
+        return
+
+    tickers_list = get_india_top50()
+    for ticker in tickers_list:
+        try:
+            stock = yf.Ticker(ticker)
+            today = datetime.today().date()
+            start = today
+            end = today + timedelta(days=1)
+            data = stock.history(start=start, end=end)
+            if not data.empty:
+                start_price = data["Close"].iloc[0]
+                end_price = data["Close"].iloc[-1]
+                pct_change = ((end_price - start_price) / start_price) * 100
+                if pct_change <= drop_threshold:
+                    message = f"🔻 Alert: {ticker} fell {pct_change:.2f}% today ({start_price:.2f} → {end_price:.2f})"
+                    send_telegram_message(message)
+                elif pct_change >= gain_threshold:
+                    message = f"🔺 Alert: {ticker} rose {pct_change:.2f}% today ({start_price:.2f} → {end_price:.2f})"
+                    send_telegram_message(message)
+        except:
+            continue
+
+def run_scheduler():
+    schedule.every(30).minutes.do(check_stocks_market_hours)
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+# Run scheduler in background thread
+scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+scheduler_thread.start()
