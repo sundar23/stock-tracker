@@ -6,10 +6,16 @@ from datetime import date, timedelta, datetime, time as dt_time
 import schedule
 import threading
 import time
+import pytz  # For India timezone
+import os
+from dotenv import load_dotenv
+
+# Load .env file
+load_dotenv()
 
 # ------------------- Telegram Setup -------------------
-TELEGRAM_BOT_TOKEN = "8285449172:AAHIb7xbDl-zuKU_udn7oOrwrOzeLpa_z_A"
-TELEGRAM_CHAT_ID = "1298346236"
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -131,13 +137,14 @@ if drop_gain_results:
 else:
     st.info("No stocks matched the weekly drop/gain criteria.")
 
-# ------------------- 30-Minute Market Hours Scheduler for India -------------------
-def check_stocks_market_hours():
-    now = datetime.now()
-    # Only weekdays
+# ------------------- 1-Hour Market Hours Scheduler for India -------------------
+def check_indian_stocks(drop_threshold, gain_threshold):
+    ist = pytz.timezone("Asia/Kolkata")
+    now = datetime.now(ist)
+    # Weekdays only
     if now.weekday() >= 5:
         return
-    # Only during market hours (9:30 - 15:30 IST)
+    # Market hours only
     market_open = dt_time(9, 30)
     market_close = dt_time(15, 30)
     if not (market_open <= now.time() <= market_close):
@@ -147,7 +154,7 @@ def check_stocks_market_hours():
     for ticker in tickers_list:
         try:
             stock = yf.Ticker(ticker)
-            today = datetime.today().date()
+            today = now.date()
             start = today
             end = today + timedelta(days=1)
             data = stock.history(start=start, end=end)
@@ -164,12 +171,13 @@ def check_stocks_market_hours():
         except:
             continue
 
-def run_scheduler():
-    schedule.every(30).minutes.do(check_stocks_market_hours)
+def run_indian_scheduler():
+    # Run every 1 hour
+    schedule.every(1).hours.do(check_indian_stocks, drop_threshold=drop_threshold, gain_threshold=gain_threshold)
     while True:
         schedule.run_pending()
         time.sleep(60)
 
 # Run scheduler in background thread
-scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+scheduler_thread = threading.Thread(target=run_indian_scheduler, daemon=True)
 scheduler_thread.start()
