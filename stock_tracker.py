@@ -138,46 +138,44 @@ else:
     st.info("No stocks matched the weekly drop/gain criteria.")
 
 # ------------------- 1-Hour Market Hours Scheduler for India -------------------
-def check_indian_stocks(drop_threshold, gain_threshold):
-    ist = pytz.timezone("Asia/Kolkata")
-    now = datetime.now(ist)
-    # Weekdays only
-    if now.weekday() >= 5:
-        return
-    # Market hours only
-    market_open = dt_time(9, 30)
-    market_close = dt_time(15, 30)
-    if not (market_open <= now.time() <= market_close):
-        return
+if exchange == "India":
+    def check_indian_stocks(drop_threshold, gain_threshold):
+        ist = pytz.timezone("Asia/Kolkata")
+        now = datetime.now(ist)
+        # Weekdays only
+        if now.weekday() >= 5:
+            return
+        # Market hours only
+        market_open = dt_time(9, 30)
+        market_close = dt_time(15, 30)
+        if not (market_open <= now.time() <= market_close):
+            return
 
-    tickers_list = get_india_top50()
-    for ticker in tickers_list:
-        try:
-            stock = yf.Ticker(ticker)
-            today = now.date()
-            start = today
-            end = today + timedelta(days=1)
-            data = stock.history(start=start, end=end)
-            if not data.empty:
-                start_price = data["Close"].iloc[0]
-                end_price = data["Close"].iloc[-1]
-                pct_change = ((end_price - start_price) / start_price) * 100
-                if pct_change <= drop_threshold:
-                    message = f"🔻 Alert: {ticker} fell {pct_change:.2f}% today ({start_price:.2f} → {end_price:.2f})"
-                    send_telegram_message(message)
-                elif pct_change >= gain_threshold:
-                    message = f"🔺 Alert: {ticker} rose {pct_change:.2f}% today ({start_price:.2f} → {end_price:.2f})"
-                    send_telegram_message(message)
-        except:
-            continue
+        tickers_list = get_india_top50()
+        for ticker in tickers_list:
+            try:
+                stock = yf.Ticker(ticker)
+                today = now.date()
+                data = stock.history(start=today, end=today + timedelta(days=1))
+                if not data.empty:
+                    start_price = data["Close"].iloc[0]
+                    end_price = data["Close"].iloc[-1]
+                    pct_change = ((end_price - start_price) / start_price) * 100
+                    if pct_change <= drop_threshold:
+                        message = f"🔻 Alert: {ticker} fell {pct_change:.2f}% today ({start_price:.2f} → {end_price:.2f})"
+                        send_telegram_message(message)
+                    elif pct_change >= gain_threshold:
+                        message = f"🔺 Alert: {ticker} rose {pct_change:.2f}% today ({start_price:.2f} → {end_price:.2f})"
+                        send_telegram_message(message)
+            except:
+                continue
 
-def run_indian_scheduler():
-    # Run every 1 hour
-    schedule.every(1).hours.do(check_indian_stocks, drop_threshold=drop_threshold, gain_threshold=gain_threshold)
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
+    def run_indian_scheduler():
+        schedule.every(1).hours.do(check_indian_stocks, drop_threshold=drop_threshold, gain_threshold=gain_threshold)
+        while True:
+            schedule.run_pending()
+            time.sleep(60)
 
-# Run scheduler in background thread
-scheduler_thread = threading.Thread(target=run_indian_scheduler, daemon=True)
-scheduler_thread.start()
+    # Start scheduler in background thread
+    scheduler_thread = threading.Thread(target=run_indian_scheduler, daemon=True)
+    scheduler_thread.start()
