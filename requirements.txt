@@ -4,3 +4,6 @@ yfinance
 requests
 schedule
 python-dotenv
+lxml
+html5lib
+beautifulsoup4
