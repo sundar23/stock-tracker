@@ -67,9 +67,11 @@ exchange = st.radio("Select Exchange", ["US", "India"])
 start_date = st.date_input("Start Date", date(2024, 1, 1))
 end_date = st.date_input("End Date", date.today())
 
+# Dynamic thresholds
 drop_threshold = st.slider("Drop Alert Threshold (%)", -10.0, 0.0, -5.0, step=0.5)
 gain_threshold = st.slider("Gain Alert Threshold (%)", 0.0, 10.0, 5.0, step=0.5)
 
+# ------------------- Top 50 Stock Data -------------------
 tickers = get_us_top50() if exchange == "US" else get_india_top50()
 end_date_plus = end_date + timedelta(days=1)
 
@@ -95,38 +97,6 @@ if results:
     st.metric("📊 Overall Portfolio % Change (Top 50)", f"{overall_pct:.2f}%")
 else:
     st.error("No stock data available. Please adjust date range or try again.")
-    
-    
-    
-# ------------------- Custom Stock Search -------------------
-st.subheader("🔍 Custom Stock Search")
-custom_input = st.text_input("Enter ticker symbols (comma-separated, e.g., TCS.NS, RELIANCE.NS, INFY.NS)")
-if custom_input:
-    custom_tickers = [x.strip() for x in custom_input.split(",") if x.strip()]
-    custom_results = []
-
-    for ticker in custom_tickers:
-        try:
-            stock = yf.Ticker(ticker)
-            data = stock.history(start=start_date, end=end_date_plus)
-            if not data.empty:
-                start_price = data["Close"].iloc[0]
-                end_price = data["Close"].iloc[-1]
-                pct_change = ((end_price - start_price) / start_price) * 100
-                custom_results.append([ticker, start_price, end_price, pct_change])
-        except Exception as e:
-            st.write(f"⚠️ Skipping {ticker}: {e}")
-            continue
-
-    if custom_results:
-        custom_df = pd.DataFrame(custom_results, columns=["Ticker", "Start Price", "End Price", "% Change"])
-        custom_df = custom_df.sort_values("% Change", ascending=False).reset_index(drop=True)
-        st.dataframe(custom_df)
-        overall_pct_custom = custom_df["% Change"].mean()
-        st.metric("📊 Overall Portfolio % Change (Custom Stocks)", f"{overall_pct_custom:.2f}%")
-    else:
-        st.info("No data available for the entered tickers.")
-    
 
 # ------------------- Weekly Drop/Gain Analysis -------------------
 st.subheader("📉📈 Drop & Gain Analysis (Last Week)")
@@ -157,7 +127,40 @@ if drop_gain_results:
 else:
     st.info("No stocks matched the weekly drop/gain criteria.")
 
-# ------------------- Background Scheduler for India -------------------
+# ------------------- Custom Stock Search -------------------
+st.subheader("🔍 Custom Stock Search")
+custom_input = st.text_input("Enter ticker symbols (comma-separated, e.g., TCS.NS, RELIANCE.NS, INFY.NS)")
+custom_start_date = st.date_input("Custom Start Date", date(2024, 1, 1), key="custom_start")
+custom_end_date = st.date_input("Custom End Date", date.today(), key="custom_end")
+custom_end_plus = custom_end_date + timedelta(days=1)
+
+if custom_input:
+    custom_tickers = [x.strip() for x in custom_input.split(",") if x.strip()]
+    custom_results = []
+
+    for ticker in custom_tickers:
+        try:
+            stock = yf.Ticker(ticker)
+            data = stock.history(start=custom_start_date, end=custom_end_plus)
+            if not data.empty:
+                start_price = data["Close"].iloc[0]
+                end_price = data["Close"].iloc[-1]
+                pct_change = ((end_price - start_price) / start_price) * 100
+                custom_results.append([ticker, start_price, end_price, pct_change])
+        except Exception as e:
+            st.write(f"⚠️ Skipping {ticker}: {e}")
+            continue
+
+    if custom_results:
+        custom_df = pd.DataFrame(custom_results, columns=["Ticker", "Start Price", "End Price", "% Change"])
+        custom_df = custom_df.sort_values("% Change", ascending=False).reset_index(drop=True)
+        st.dataframe(custom_df)
+        overall_pct_custom = custom_df["% Change"].mean()
+        st.metric("📊 Overall Portfolio % Change (Custom Stocks)", f"{overall_pct_custom:.2f}%")
+    else:
+        st.info("No data available for the entered tickers.")
+
+# ------------------- Background Scheduler for Indian Stocks -------------------
 def check_indian_stocks(drop_threshold, gain_threshold):
     ist = pytz.timezone("Asia/Kolkata")
     now = datetime.now(ist)
@@ -188,7 +191,8 @@ def check_indian_stocks(drop_threshold, gain_threshold):
             continue
 
 def run_indian_scheduler():
-    schedule.every(1).hours.do(check_indian_stocks, drop_threshold=drop_threshold, gain_threshold=gain_threshold)
+    # Run every 1 hour during market hours
+    schedule.every().hour.do(check_indian_stocks, drop_threshold=drop_threshold, gain_threshold=gain_threshold)
     while True:
         schedule.run_pending()
         time.sleep(60)
