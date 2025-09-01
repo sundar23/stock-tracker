@@ -127,18 +127,33 @@ if drop_gain_results:
 else:
     st.info("No stocks matched the weekly drop/gain criteria.")
 
-# ------------------- Custom Stock Search -------------------
+# ------------------- Custom Stock Search with Autosuggest -------------------
 st.subheader("🔍 Custom Stock Search")
-custom_input = st.text_input("Enter ticker symbols (comma-separated, e.g., TCS.NS, RELIANCE.NS, INFY.NS)")
+
+# Fetch a large list of tickers (e.g., US + India)
+@st.cache_data
+def get_all_tickers():
+    us = get_us_top50()  # or a larger US list if you want
+    india = get_india_top50()
+    return sorted(us + india)
+
+all_tickers = get_all_tickers()
+
+# Multiselect widget provides autosuggest
+custom_tickers_selected = st.multiselect(
+    "Select stocks (autosuggest enabled)",
+    options=all_tickers,
+    default=[]
+)
+
+# Custom date range for these tickers
 custom_start_date = st.date_input("Custom Start Date", date(2024, 1, 1), key="custom_start")
 custom_end_date = st.date_input("Custom End Date", date.today(), key="custom_end")
 custom_end_plus = custom_end_date + timedelta(days=1)
 
-if custom_input:
-    custom_tickers = [x.strip() for x in custom_input.split(",") if x.strip()]
+if custom_tickers_selected:
     custom_results = []
-
-    for ticker in custom_tickers:
+    for ticker in custom_tickers_selected:
         try:
             stock = yf.Ticker(ticker)
             data = stock.history(start=custom_start_date, end=custom_end_plus)
@@ -158,7 +173,7 @@ if custom_input:
         overall_pct_custom = custom_df["% Change"].mean()
         st.metric("📊 Overall Portfolio % Change (Custom Stocks)", f"{overall_pct_custom:.2f}%")
     else:
-        st.info("No data available for the entered tickers.")
+        st.info("No data available for the selected tickers.")
 
 # ------------------- Background Scheduler for Indian Stocks -------------------
 def check_indian_stocks(drop_threshold, gain_threshold):
