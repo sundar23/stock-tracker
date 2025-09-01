@@ -95,6 +95,38 @@ if results:
     st.metric("📊 Overall Portfolio % Change (Top 50)", f"{overall_pct:.2f}%")
 else:
     st.error("No stock data available. Please adjust date range or try again.")
+    
+    
+    
+# ------------------- Custom Stock Search -------------------
+st.subheader("🔍 Custom Stock Search")
+custom_input = st.text_input("Enter ticker symbols (comma-separated, e.g., TCS.NS, RELIANCE.NS, INFY.NS)")
+if custom_input:
+    custom_tickers = [x.strip() for x in custom_input.split(",") if x.strip()]
+    custom_results = []
+
+    for ticker in custom_tickers:
+        try:
+            stock = yf.Ticker(ticker)
+            data = stock.history(start=start_date, end=end_date_plus)
+            if not data.empty:
+                start_price = data["Close"].iloc[0]
+                end_price = data["Close"].iloc[-1]
+                pct_change = ((end_price - start_price) / start_price) * 100
+                custom_results.append([ticker, start_price, end_price, pct_change])
+        except Exception as e:
+            st.write(f"⚠️ Skipping {ticker}: {e}")
+            continue
+
+    if custom_results:
+        custom_df = pd.DataFrame(custom_results, columns=["Ticker", "Start Price", "End Price", "% Change"])
+        custom_df = custom_df.sort_values("% Change", ascending=False).reset_index(drop=True)
+        st.dataframe(custom_df)
+        overall_pct_custom = custom_df["% Change"].mean()
+        st.metric("📊 Overall Portfolio % Change (Custom Stocks)", f"{overall_pct_custom:.2f}%")
+    else:
+        st.info("No data available for the entered tickers.")
+    
 
 # ------------------- Weekly Drop/Gain Analysis -------------------
 st.subheader("📉📈 Drop & Gain Analysis (Last Week)")
