@@ -67,7 +67,6 @@ exchange = st.radio("Select Exchange", ["US", "India"])
 start_date = st.date_input("Start Date", date(2024, 1, 1))
 end_date = st.date_input("End Date", date.today())
 
-# Dynamic thresholds
 drop_threshold = st.slider("Drop Alert Threshold (%)", -10.0, 0.0, -5.0, step=0.5)
 gain_threshold = st.slider("Gain Alert Threshold (%)", 0.0, 10.0, 5.0, step=0.5)
 
@@ -127,26 +126,36 @@ if drop_gain_results:
 else:
     st.info("No stocks matched the weekly drop/gain criteria.")
 
-# ------------------- Custom Stock Search with Autosuggest -------------------
+# ------------------- Full Market Autosuggest for Custom Search -------------------
 st.subheader("🔍 Custom Stock Search")
 
-# Fetch a large list of tickers (e.g., US + India)
+# ------------------- Load all tickers -------------------
 @st.cache_data
-def get_all_tickers():
-    us = get_us_top50()  # or a larger US list if you want
-    india = get_india_top50()
-    return sorted(us + india)
+def get_all_market_tickers():
+    # Replace these placeholders with CSVs or APIs for full list
+    # US all tickers: all_us.csv with column "Symbol"
+    # India all tickers: all_india.csv with column "Symbol"
+    try:
+        us_all = pd.read_csv("all_us.csv")['Symbol'].tolist()
+    except:
+        us_all = get_us_top50()  # fallback to top 50
+    try:
+        india_all = pd.read_csv("all_india.csv")['Symbol'].tolist()
+        india_all = [x + ".NS" for x in india_all]
+    except:
+        india_all = get_india_top50()  # fallback
+    return sorted(us_all + india_all)
 
-all_tickers = get_all_tickers()
+all_tickers = get_all_market_tickers()
 
-# Multiselect widget provides autosuggest
+# Multiselect autosuggest
 custom_tickers_selected = st.multiselect(
     "Select stocks (autosuggest enabled)",
     options=all_tickers,
     default=[]
 )
 
-# Custom date range for these tickers
+# Separate custom date range
 custom_start_date = st.date_input("Custom Start Date", date(2024, 1, 1), key="custom_start")
 custom_end_date = st.date_input("Custom End Date", date.today(), key="custom_end")
 custom_end_plus = custom_end_date + timedelta(days=1)
@@ -212,6 +221,5 @@ def run_indian_scheduler():
         schedule.run_pending()
         time.sleep(60)
 
-# Only run scheduler for India
 if exchange == "India":
     threading.Thread(target=run_indian_scheduler, daemon=True).start()
