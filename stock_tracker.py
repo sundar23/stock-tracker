@@ -6,17 +6,16 @@ from datetime import date, timedelta, datetime, time as dt_time
 import schedule
 import threading
 import time
-import pytz  # For India timezone
+import pytz
 import os
 from dotenv import load_dotenv
 
-# Load .env file
+# ------------------- Load environment -------------------
 load_dotenv()
-
-# ------------------- Telegram Setup -------------------
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+# ------------------- Telegram function -------------------
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
@@ -25,23 +24,20 @@ def send_telegram_message(message):
     except Exception as e:
         st.write(f"⚠️ Telegram send failed: {e}")
 
-# ------------------- Utility: Fetch HTML -------------------
+# ------------------- Utility -------------------
 def fetch_html(url):
     headers = {"User-Agent": "Mozilla/5.0"}
     response = requests.get(url, headers=headers)
     response.raise_for_status()
     return response.text
 
-# ------------------- Fetch US Top 50 -------------------
 @st.cache_data
 def get_us_top50():
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     html = fetch_html(url)
     tables = pd.read_html(html)
-    tickers = tables[0]["Symbol"].tolist()
-    return tickers[:50]
+    return tables[0]["Symbol"].tolist()[:50]
 
-# ------------------- Fetch India Top 50 -------------------
 @st.cache_data
 def get_india_top50():
     url = "https://en.wikipedia.org/wiki/NIFTY_50"
@@ -63,24 +59,20 @@ def get_india_top50():
     if col_name is None:
         st.error("⚠️ No usable ticker column found in NIFTY 50 table.")
         return []
-    tickers = table[col_name].astype(str).apply(lambda x: x + ".NS").tolist()
-    return tickers[:50]
+    return table[col_name].astype(str).apply(lambda x: x + ".NS").tolist()[:50]
 
 # ------------------- Streamlit UI -------------------
 st.title("📈 Stock Tracker - US & India")
-
 exchange = st.radio("Select Exchange", ["US", "India"])
 start_date = st.date_input("Start Date", date(2024, 1, 1))
 end_date = st.date_input("End Date", date.today())
 
-# Dynamic thresholds
 drop_threshold = st.slider("Drop Alert Threshold (%)", -10.0, 0.0, -5.0, step=0.5)
 gain_threshold = st.slider("Gain Alert Threshold (%)", 0.0, 10.0, 5.0, step=0.5)
 
 tickers = get_us_top50() if exchange == "US" else get_india_top50()
 end_date_plus = end_date + timedelta(days=1)
 
-# ------------------- Top 50 Stock Data -------------------
 st.subheader(f"Top 50 Stocks - {exchange}")
 results = []
 for ticker in tickers:
@@ -92,8 +84,7 @@ for ticker in tickers:
             end_price = data["Close"].iloc[-1]
             pct_change = ((end_price - start_price) / start_price) * 100
             results.append([ticker, start_price, end_price, pct_change])
-    except Exception as e:
-        st.write(f"⚠️ Skipping {ticker} ({e})")
+    except:
         continue
 
 if results:
@@ -105,7 +96,7 @@ if results:
 else:
     st.error("No stock data available. Please adjust date range or try again.")
 
-# ------------------- Drop/Gain Weekly Analysis -------------------
+# ------------------- Weekly Drop/Gain Analysis -------------------
 st.subheader("📉📈 Drop & Gain Analysis (Last Week)")
 with st.expander("Set Weekly Thresholds"):
     drop_weekly_threshold = st.slider("Weekly Drop Threshold (%)", -10.0, 0.0, -2.0, step=0.5)
@@ -125,9 +116,6 @@ for ticker in tickers:
             pct_change = ((end_price - start_price) / start_price) * 100
             if pct_change <= drop_weekly_threshold or pct_change >= gain_weekly_threshold:
                 drop_gain_results.append([ticker, start_price, end_price, pct_change])
-                alert_type = "🔻 Drop" if pct_change <= drop_weekly_threshold else "🔺 Gain"
-                message = f"{alert_type}: {ticker} changed {pct_change:.2f}% from {start_price:.2f} to {end_price:.2f}"
-                send_telegram_message(message)
     except:
         continue
 
@@ -137,45 +125,42 @@ if drop_gain_results:
 else:
     st.info("No stocks matched the weekly drop/gain criteria.")
 
-# ------------------- 1-Hour Market Hours Scheduler for India -------------------
+# ------------------- Background Scheduler for India -------------------
+def check_indian_stocks(drop_threshold, gain_threshold):
+    ist = pytz.timezone("Asia/Kolkata")
+    now = datetime.now(ist)
+    if now.weekday() >= 5:  # skip weekends
+        return
+    market_open = dt_time(9, 30)
+    market_close = dt_time(15, 30)
+    if not (market_open <= now.time() <= market_close):
+        return
+
+    tickers_list = get_india_top50()
+    for ticker in tickers_list:
+        try:
+            stock = yf.Ticker(ticker)
+            today = now.date()
+            data = stock.history(start=today, end=today + timedelta(days=1))
+            if not data.empty:
+                start_price = data["Close"].iloc[0]
+                end_price = data["Close"].iloc[-1]
+                pct_change = ((end_price - start_price) / start_price) * 100
+                if pct_change <= drop_threshold:
+                    message = f"🔻 Alert: {ticker} fell {pct_change:.2f}% today ({start_price:.2f} → {end_price:.2f})"
+                    send_telegram_message(message)
+                elif pct_change >= gain_threshold:
+                    message = f"🔺 Alert: {ticker} rose {pct_change:.2f}% today ({start_price:.2f} → {end_price:.2f})"
+                    send_telegram_message(message)
+        except:
+            continue
+
+def run_indian_scheduler():
+    schedule.every(1).hours.do(check_indian_stocks, drop_threshold=drop_threshold, gain_threshold=gain_threshold)
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+# Only run scheduler for India
 if exchange == "India":
-    def check_indian_stocks(drop_threshold, gain_threshold):
-        ist = pytz.timezone("Asia/Kolkata")
-        now = datetime.now(ist)
-        # Weekdays only
-        if now.weekday() >= 5:
-            return
-        # Market hours only
-        market_open = dt_time(9, 30)
-        market_close = dt_time(15, 30)
-        if not (market_open <= now.time() <= market_close):
-            return
-
-        tickers_list = get_india_top50()
-        for ticker in tickers_list:
-            try:
-                stock = yf.Ticker(ticker)
-                today = now.date()
-                data = stock.history(start=today, end=today + timedelta(days=1))
-                if not data.empty:
-                    start_price = data["Close"].iloc[0]
-                    end_price = data["Close"].iloc[-1]
-                    pct_change = ((end_price - start_price) / start_price) * 100
-                    if pct_change <= drop_threshold:
-                        message = f"🔻 Alert: {ticker} fell {pct_change:.2f}% today ({start_price:.2f} → {end_price:.2f})"
-                        send_telegram_message(message)
-                    elif pct_change >= gain_threshold:
-                        message = f"🔺 Alert: {ticker} rose {pct_change:.2f}% today ({start_price:.2f} → {end_price:.2f})"
-                        send_telegram_message(message)
-            except:
-                continue
-
-    def run_indian_scheduler():
-        schedule.every(1).hours.do(check_indian_stocks, drop_threshold=drop_threshold, gain_threshold=gain_threshold)
-        while True:
-            schedule.run_pending()
-            time.sleep(60)
-
-    # Start scheduler in background thread
-    scheduler_thread = threading.Thread(target=run_indian_scheduler, daemon=True)
-    scheduler_thread.start()
+    threading.Thread(target=run_indian_scheduler, daemon=True).start()
