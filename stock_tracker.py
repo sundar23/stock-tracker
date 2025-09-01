@@ -31,6 +31,7 @@ def fetch_html(url):
     response.raise_for_status()
     return response.text
 
+# ------------------- Top 50 Stocks -------------------
 @st.cache_data
 def get_us_top50():
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
@@ -61,8 +62,28 @@ def get_india_top50():
         return []
     return table[col_name].astype(str).apply(lambda x: x + ".NS").tolist()[:50]
 
+# ------------------- Full Ticker Universe for Autosuggest -------------------
+@st.cache_data
+def get_all_tickers():
+    # US: S&P500 full list
+    url_us = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    us_table = pd.read_html(fetch_html(url_us))[0]
+    us_tickers = us_table["Symbol"].tolist()
+    # India: NSE listed stocks CSV
+    try:
+        url_india = "https://www1.nseindia.com/content/equities/EQUITY_L.csv"
+        india_table = pd.read_csv(url_india)
+        india_tickers = (india_table['SYMBOL'] + ".NS").tolist()
+    except:
+        # fallback to top 50
+        india_tickers = get_india_top50()
+    return sorted(us_tickers + india_tickers)
+
+all_tickers = get_all_tickers()
+
 # ------------------- Streamlit UI -------------------
 st.title("📈 Stock Tracker - US & India")
+
 exchange = st.radio("Select Exchange", ["US", "India"])
 start_date = st.date_input("Start Date", date(2024, 1, 1))
 end_date = st.date_input("End Date", date.today())
@@ -70,10 +91,10 @@ end_date = st.date_input("End Date", date.today())
 drop_threshold = st.slider("Drop Alert Threshold (%)", -10.0, 0.0, -5.0, step=0.5)
 gain_threshold = st.slider("Gain Alert Threshold (%)", 0.0, 10.0, 5.0, step=0.5)
 
-# ------------------- Top 50 Stock Data -------------------
 tickers = get_us_top50() if exchange == "US" else get_india_top50()
 end_date_plus = end_date + timedelta(days=1)
 
+# ------------------- Top 50 Stock Data -------------------
 st.subheader(f"Top 50 Stocks - {exchange}")
 results = []
 for ticker in tickers:
@@ -126,36 +147,14 @@ if drop_gain_results:
 else:
     st.info("No stocks matched the weekly drop/gain criteria.")
 
-# ------------------- Full Market Autosuggest for Custom Search -------------------
+# ------------------- Custom Stock Search with Autosuggest -------------------
 st.subheader("🔍 Custom Stock Search")
-
-# ------------------- Load all tickers -------------------
-@st.cache_data
-def get_all_market_tickers():
-    # Replace these placeholders with CSVs or APIs for full list
-    # US all tickers: all_us.csv with column "Symbol"
-    # India all tickers: all_india.csv with column "Symbol"
-    try:
-        us_all = pd.read_csv("all_us.csv")['Symbol'].tolist()
-    except:
-        us_all = get_us_top50()  # fallback to top 50
-    try:
-        india_all = pd.read_csv("all_india.csv")['Symbol'].tolist()
-        india_all = [x + ".NS" for x in india_all]
-    except:
-        india_all = get_india_top50()  # fallback
-    return sorted(us_all + india_all)
-
-all_tickers = get_all_market_tickers()
-
-# Multiselect autosuggest
 custom_tickers_selected = st.multiselect(
-    "Select stocks (autosuggest enabled)",
+    "Select stocks (autosuggest for all listed stocks)",
     options=all_tickers,
     default=[]
 )
 
-# Separate custom date range
 custom_start_date = st.date_input("Custom Start Date", date(2024, 1, 1), key="custom_start")
 custom_end_date = st.date_input("Custom End Date", date.today(), key="custom_end")
 custom_end_plus = custom_end_date + timedelta(days=1)
@@ -216,10 +215,11 @@ def check_indian_stocks(drop_threshold, gain_threshold):
 
 def run_indian_scheduler():
     # Run every 1 hour during market hours
-    schedule.every().hour.do(check_indian_stocks, drop_threshold=drop_threshold, gain_threshold=gain_threshold)
+    schedule.every(1).hours.do(check_indian_stocks, drop_threshold=drop_threshold, gain_threshold=gain_threshold)
     while True:
         schedule.run_pending()
         time.sleep(60)
 
+# Run scheduler only if India selected
 if exchange == "India":
     threading.Thread(target=run_indian_scheduler, daemon=True).start()
